@@ -1,0 +1,15 @@
+#!/bin/bash
+
+export PATH=$PATH:/usr/local/scala/bin:/usr/local/spark/bin:/usr/local/anaconda2/bin
+export PYSPARK_PYTHON=/usr/local/anaconda2/bin/python2.7
+
+script_file=fields_conversion.py
+#new_data=/user/contentoptimization/midt_orc_carrierassociation_daily/
+#history_dir=/user/contentoptimization/
+#midt_date=$(date +%Y%m%d -d "$(date) - 41 day")
+#namenode=hdfs://10.4.113.106:8020
+
+args="--master yarn --conf spark.hadoop.yarn.timeline-service.enabled=false"
+opt="--num-executors 3 --driver-memory 10G --executor-memory 12G --executor-cores 3"
+
+spark-submit $args $opt --files /usr/hdp/2.3.4.7-4/hive/conf/hive-site.xml $script_file

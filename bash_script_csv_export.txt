@@ -1,0 +1,9 @@
+#!/bin/bash
+
+hive -e "drop table if exists csv_dump;
+create table csv_dump ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'
+LOCATION '/apps/hive/warehouse/csv_dump' as
+select * from midt_pcc_classification_test;"
+
+hdfs dfs -getmerge /apps/hive/warehouse/csv_dump/* /tmp/midt_pcc.csv

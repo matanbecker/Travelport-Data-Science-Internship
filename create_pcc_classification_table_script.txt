@@ -1,0 +1,182 @@
+#!/bin/bash
+
+hive -e "
+create table midt_pcc_classification as SELECT pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrofromcountrycode, metrotocitycode, h.countrycode as metrotocountrycode, g.tripcarrier, bookingclass, cabinclass, g.volume FROM midt_cities h RIGHT JOIN (SELECT pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, e.countrycode as metrofromcountrycode, d.tripcarrier, bookingclass, cabinclass, d.volume FROM midt_cities e RIGHT JOIN (select pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, c.tripcarrier, c.tripclass as bookingclass, max(case when d.cabinclass is null then '5' else d.cabinclass end) as cabinclass, c.volume from cos2cabin_txt d right join (select pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, b.tripcarrier, b.volume, b.tripclass, case when a.carriercode is null then '$$' else b.tripcarrier end as carriercode, a.cabinclass from cos2cabin_txt a right join (select pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, tripcarrier, tripclass, count(*) as volume from midt_avro_v2 where midt_date='20161201' group by pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, tripcarrier, tripclass) b on a.carriercode = b.tripcarrier and a.bookingclass = b.tripclass) c on d.carriercode = c.carriercode and d.bookingclass = c.tripclass group by pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, c.tripcarrier, c.tripclass, c.volume) d on (upper(d.metrofromcitycode)) = (upper(e.citycode)) group by pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, e.countrycode, d.tripcarrier, bookingclass, cabinclass, d.volume) g ON (upper(g.metrofromcitycode)) = (upper(h.citycode)) GROUP BY pseudocitycode, poscountrycode, tripoptcxr, trippassengers, domesticinternationalcode, pointoforigin, totalstops, interlineindicator, advpurchasedays, segmentcount, metrofromcitycode, metrotocitycode, metrofromcountrycode, h.countrycode, g.tripcarrier, bookingclass, cabinclass, g.volume;
+
+"
+exit
+
+****************************************************************************************************************
+****************************************************************************************************************
+
+FINAL QUERY - HIERARCHICAL DISPLAY:
+
+"
+CREATE table midt_pcc_classification as 
+SELECT 
+	pseudocitycode, 
+	poscountrycode, 
+	tripoptcxr, 
+	trippassengers, 
+	domesticinternationalcode, 
+	pointoforigin, 
+	totalstops, 
+	interlineindicator, 
+	advpurchasedays, 
+	segmentcount, 
+	metrofromcitycode, 
+	metrofromcountrycode, 
+	metrotocitycode, 
+	h.countrycode as metrotocountrycode, 
+	g.tripcarrier, 
+	bookingclass, 
+	cabinclass, 
+	g.volume 
+FROM midt_cities h 
+RIGHT JOIN (SELECT 
+			pseudocitycode, 
+			poscountrycode, 
+			tripoptcxr, 
+			trippassengers, 
+			domesticinternationalcode, 
+			pointoforigin, 
+			totalstops, 
+			interlineindicator, 
+			advpurchasedays, 
+			segmentcount, 
+			metrofromcitycode, 
+			metrotocitycode, 
+			e.countrycode as metrofromcountrycode, 
+			d.tripcarrier, 
+			bookingclass, 
+			cabinclass, 
+			d.volume 
+		FROM midt_cities e 
+		RIGHT JOIN (select 
+					pseudocitycode, 
+					poscountrycode, 
+					tripoptcxr, 
+					trippassengers, 
+					domesticinternationalcode, 
+					pointoforigin, 
+					totalstops, 
+					interlineindicator, 
+					advpurchasedays, 
+					segmentcount, 
+					metrofromcitycode, 
+					metrotocitycode, 
+					c.tripcarrier, 
+					c.tripclass as bookingclass, 
+					max(case when d.cabinclass is null then '5' else d.cabinclass end) as cabinclass, 
+					c.volume 
+				FROM cos2cabin_txt d 
+				RIGTH JOIN (select 
+							pseudocitycode, 
+							poscountrycode, 
+							tripoptcxr, 
+							trippassengers, 
+							domesticinternationalcode, 
+							pointoforigin, 
+							totalstops, 
+							interlineindicator, 
+							advpurchasedays, 
+							segmentcount, 
+							metrofromcitycode, 
+							metrotocitycode, 
+							b.tripcarrier, 
+							b.volume, 
+							b.tripclass, 
+							case when a.carriercode is null then '$$' else b.tripcarrier end as carriercode, 
+							a.cabinclass 
+						FROM cos2cabin_txt a 
+						RIGHT JOIN (select 
+									pseudocitycode, 
+									poscountrycode, 
+									tripoptcxr, 
+									trippassengers, 
+									domesticinternationalcode, 
+									pointoforigin, 
+									totalstops, 
+									interlineindicator, 
+									advpurchasedays, 
+									segmentcount, 
+									metrofromcitycode, 
+									metrotocitycode, 
+									tripcarrier, 
+									tripclass, 
+									count(*) as volume 
+								FROM midt_avro_v2 
+								WHERE midt_date='20161201' 
+								GROUP BY 
+									pseudocitycode, 
+									poscountrycode, 
+									tripoptcxr, 
+									trippassengers, 
+									domesticinternationalcode, 
+									pointoforigin, 
+									totalstops, 
+									interlineindicator, 
+									advpurchasedays, 
+									segmentcount, 
+									metrofromcitycode, 
+									metrotocitycode, 
+									tripcarrier, 
+									tripclass) b 
+						ON a.carriercode = b.tripcarrier and a.bookingclass = b.tripclass) c 
+				ON d.carriercode = c.carriercode and d.bookingclass = c.tripclass 
+				GROUP BY 
+					pseudocitycode, 
+					poscountrycode, 
+					tripoptcxr, 
+					trippassengers, 
+					domesticinternationalcode, 
+					pointoforigin, 
+					totalstops, 
+					interlineindicator, 
+					advpurchasedays, 
+					segmentcount, 
+					metrofromcitycode, 
+					metrotocitycode, 
+					c.tripcarrier, 
+					c.tripclass, 
+					c.volume) d 
+		ON (upper(d.metrofromcitycode)) = (upper(e.citycode)) 
+		GROUP BY 
+			pseudocitycode, 
+			poscountrycode, 
+			tripoptcxr, 
+			trippassengers, 
+			domesticinternationalcode, 
+			pointoforigin, 
+			totalstops, 
+			interlineindicator, 
+			advpurchasedays, 
+			segmentcount, 
+			metrofromcitycode, 
+			metrotocitycode, 
+			e.countrycode, 
+			d.tripcarrier, 
+			bookingclass, 
+			cabinclass, 
+			d.volume) g 
+ON (upper(g.metrofromcitycode)) = (upper(h.citycode)) 
+GROUP BY 
+	pseudocitycode, 
+	poscountrycode, 
+	tripoptcxr, 
+	trippassengers, 
+	domesticinternationalcode, 
+	pointoforigin, 
+	totalstops, 	
+	interlineindicator, 
+	advpurchasedays, 
+	segmentcount, 
+	metrofromcitycode, 
+	metrotocitycode, 
+	metrofromcountrycode, 
+	h.countrycode, 
+	g.tripcarrier, 
+	bookingclass, 
+	cabinclass, 
+	g.volume;
+"

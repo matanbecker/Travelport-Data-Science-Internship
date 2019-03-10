@@ -1,0 +1,278 @@
+PCC CLASSIFICATION MODELS SCRIPT:
+
+*************************************************************************************************************************************************************
+*************************************************************************************************************************************************************
+
+from os.path import expanduser, join, abspath
+from pyspark.sql import HiveContext
+from pyspark.sql import SparkSession, SQLContext
+from pyspark.sql import functions as F
+from pyspark.sql.functions import *
+from pyspark.sql import *
+from pyspark import SparkConf, SparkContext, SQLContext
+from pyspark.ml.feature import StringIndexer, VectorAssembler, PCA
+from pyspark.ml import Pipeline
+from collections import defaultdict
+from pyspark.sql.types import *
+from pyspark.mllib.linalg import SparseVector, DenseVector, Vectors
+import sys
+import os
+import numpy as np
+from pyspark.ml.regression import GeneralizedLinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.regression import LinearRegression
+from pyspark.mllib.regression import LabeledPoint
+from pyspark.ml.tuning import ParamGridBuilder, TrainValidationSplit, CrossValidator
+from pyspark.ml.evaluation import BinaryClassificationEvaluator as BCE
+from sklearn.linear_model import LinearRegression
+from pyspark.mllib.stat import Statistics
+from math import isnan, sqrt
+from numpy import array
+from pyspark.ml.clustering import KMeans
+import matplotlib
+
+
+# Initializing Spark Instance:
+spark = SparkSession \
+    .builder \
+    .appName("classification_model") \
+    .enableHiveSupport() \
+    .getOrCreate()
+
+# Loading in csv files of pcc_classification dataset:
+dfr = spark.read.format('csv').options(header='false', delimiter=',',inferschema='true').load("/user/matan.becker/dfr_num.csv")
+dfr.createOrReplaceTempView("dfr_num") # Creates temporary view
+dfr = dfr.na.drop()  #drops N/As from dataset (models cannot run with null values inside dataset)
+dfr.describe()       #Summary of dataset
+
+# CATEGORICAL DATASET:
+#df_cat = spark.read.format('csv').options(header='false', delimiter=',').load("/user/matan.becker/dfr_cat.csv")
+#df_cat = df_cat.withColumnRenamed('_c0', 'PCC').withColumnRenamed('_c1','POS').withColumnRenamed('_c2','optcxr').withColumnRenamed('_c3','mktcxr').withColumnRenamed('_c4', 'trippassengers').withColumnRenamed('_c5', 'stops').withColumnRenamed('_c6','APD').withColumnRenamed('_c7','seg_count').withColumnRenamed('_c8','DOI').withColumnRenamed('_c9','interline').withColumnRenamed('_c10','metrofrom_cc').withColumnRenamed('_c11','metroto_cc').withColumnRenamed('_c12','cabinclass').withColumnRenamed('_c13','volume').cache()
+
+# Select columns from dataframe - assign feature names to columns:
+dfr = dfr.select('_c0','_c1','_c2','_c3','_c4','_c5','_c6','_c7','_c8','_c9','_c10','_c11','_c12','_c13')
+dfr = dfr.withColumnRenamed('_c0', 'PCC').withColumnRenamed('_c1','POS').withColumnRenamed('_c2','optcxr').withColumnRenamed('_c3','mktcxr').withColumnRenamed('_c4', 'trippassengers').withColumnRenamed('_c5', 'stops').withColumnRenamed('_c6','APD').withColumnRenamed('_c7','seg_count').withColumnRenamed('_c8','DOI').withColumnRenamed('_c9','interline').withColumnRenamed('_c10','metrofrom_cc').withColumnRenamed('_c11','metroto_cc').withColumnRenamed('_c12','cabinclass').withColumnRenamed('_c13','volume')
+
+# Convert columns to FloatType for KNN-means model:
+
+dfr = dfr.withColumn('PCC', dfr['PCC'].cast(FloatType())) \
+   .withColumn('POS', dfr['POS'].cast(FloatType())) \
+   .withColumn('optcxr', dfr['optcxr'].cast(FloatType())) \
+   .withColumn('mktcxr', dfr['mktcxr'].cast(FloatType())) \
+   .withColumn('trippassengers', dfr['trippassengers'].cast(FloatType())) \
+   .withColumn('stops', dfr['stops'].cast(FloatType())) \
+   .withColumn('APD', dfr['APD'].cast(FloatType())) \
+   .withColumn('seg_count', dfr['seg_count'].cast(FloatType())) \
+   .withColumn('DOI', dfr['DOI'].cast(FloatType()))  \
+   .withColumn('interline', dfr['interline'].cast(FloatType())) \
+   .withColumn('metrofrom_cc', dfr['metrofrom_cc'].cast(FloatType()))  \
+   .withColumn('metroto_cc', dfr['metroto_cc'].cast(FloatType()))  \
+   .withColumn('cabinclass', dfr['cabinclass'].cast(FloatType()))  \
+   .withColumn('volume', dfr['volume'].cast(FloatType()))  \
+
+# Convert to DoubleType for GLM:
+
+#dfr = dfr.withColumn('PCC', dfr['PCC'].cast(DoubleType())) \
+#   .withColumn('POS', dfr['POS'].cast(DoubleType())) \
+#   .withColumn('optcxr', dfr['optcxr'].cast(DoubleType())) \
+#   .withColumn('mktcxr', dfr['mktcxr'].cast(DoubleType())) \
+#   .withColumn('trippassengers', dfr['trippassengers'].cast(DoubleType())) \
+#   .withColumn('stops', dfr['stops'].cast(DoubleType())) \
+#   .withColumn('APD', dfr['APD'].cast(DoubleType())) \
+#   .withColumn('seg_count', dfr['seg_count'].cast(DoubleType())) \
+#   .withColumn('DOI', dfr['DOI'].cast(DoubleType()))  \
+#   .withColumn('interline', dfr['interline'].cast(DoubleType())) \
+#   .withColumn('metrofrom_cc', dfr['metrofrom_cc'].cast(DoubleType()))  \
+#   .withColumn('metroto_cc', dfr['metroto_cc'].cast(DoubleType()))  \
+#   .withColumn('cabinclass', dfr['cabinclass'].cast(DoubleType()))  \
+#   .withColumn('volume', dfr['volume'].cast(DoubleType()))  \
+
+# Function to convert dataframe to new data type:
+def convertCol(dfr, names, newType):
+       for name in names:
+               df = dfr.withColumn(name, dfr[name].cast(newType))
+       return df
+
+columns = ['PCC','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume']
+
+df = convertCol(dfr, columns, FloatType()).cache()
+#df = convertCol(dfr, columns, DoubleType()).cache()
+
+df.describe().show()
+
+# Trying to save plot to image .png file - not working:
+#fig, ax = plt.subplots()
+#ax.plot(x, y)
+#fig.savefig('fig1.png')
+#plt.show()
+#fig.savefig('fig2.png')
+
+# Split into testing/training datasets:
+train,test = df.randomSplit([0.75,0.25], seed=12345)
+for i in xrange(0,13):
+       train_test_split = df.randomSplit(weights=[0.75,0.25])
+       train_df = train_test_split[0]
+       test_df = train_test_split[1]
+
+# Selecting dataset - ALL features including PCC:
+dataset_train = train_df.select('PCC','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume')
+dataset_test = test_df.select('PCC','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume')
+
+# Vector Assembler to transform column features to a column of vectors - ALL features including PCC:
+assembler_all = VectorAssembler(inputCols = ['PCC','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume'], outputCol = 'features')
+
+# Vector Assembler to transform column features to a column of vectors - features NOT including PCC:
+assembler_features = VectorAssembler(inputCols = ['POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume'], outputCol = 'features')
+
+# Doing actual conversions from columns to vector - training and testing datasets - ALL features including PCC:
+ffeatures_all_train = assembler_all.transform(dataset_train).cache()
+ffeatures_all_test = assembler_all.transform(dataset_test).cache()
+
+# Doing actual conversions from columns to vector - training and testing datasets - features NOT including PCC:
+ffeatures_train = assembler_features.transform(dataset_train).cache()
+ffeatures_test = assembler_features.transform(dataset_test).cache()
+
+# New dataframe selecting only the new 'features' column of vectors - ALL features including PCC:
+ffeatures_all_train = ffeatures_all_train.select('features').cache()
+ffeatures_all_test = ffeatures_all_test.select('features').cache()
+print(ffeatures_all_train.show())
+print(ffeatures_all_test.show())
+
+# Creates new 'ffeatures_train' dataframe selecting PCC (name changed to 'label' to run through models) and the new 'features' column of vectors - ALL features including PCC:
+ffeatures_train = ffeatures_train.select('PCC','features')
+ffeatures_train = ffeatures_train.withColumnRenamed('PCC','label').cache()
+print(ffeatures_train.show())
+
+# Creates new 'ffeatures_test' dataframe selecting PCC (name changed to 'label' to run through models) and the new 'features' column of vectors - ALL features including PCC:
+ffeatures_test = ffeatures_test.select('PCC','features')
+ffeatures_test = ffeatures_test.withColumnRenamed('PCC','label').cache()
+print(ffeatures_test.show())
+
+# Pre-processing for PCA and Correlation Matrix:
+
+ffeatures_xi = ffeatures_train.select('features').cache()
+ffeatures_xi = ffeatures_xi.rdd.map(lambda row: row[0:]).cache()
+
+# PCA- Method 1:
+
+df2 = ffeatures_train.select("label", "features")
+rdd = df2.rdd.map(lambda x: Row(label=x[0],features=DenseVector(x[1].toArray()))
+                     if (len(x)>1 and hasattr(x[1], "toArray"))
+                     else Row(label=None, features=DenseVector([])))
+df3 = spark.createDataFrame(rdd)
+
+def estimateCovariance(df3):
+        m = df3.select(df3['features']).rdd.map(lambda x: x[0]).mean() #get mean of features
+        dfZeroMean = df3.select(df3['features']).rdd.map(lambda x:   x[0]).map(lambda x: x-m)  # subtract the mean
+        return dfZeroMean.map(lambda x: np.outer(x,x)).sum()/df3.count()
+
+from numpy.linalg import eigh
+def pca(df3, k=4):
+        cov = estimateCovariance(df3)
+        col = cov.shape[1]
+        eigVals, eigVecs = eigh(cov)
+        inds = np.argsort(eigVals)
+        eigVecs = eigVecs.T[inds[-1:-(col+1):-1]]
+        components = eigVecs[0:k]
+        eigVals = eigVals[inds[-1:-(col+1):-1]]  # sort eigenvals
+        score = df3.select(df3['features']).rdd.map(lambda x: x[0]).map(lambda x: np.dot(x, components.T) )
+        # Return the `k` principal components, `k` scores, and all eigenvalues
+        return components.T, score, eigVals
+
+comp, score, eigVals = pca(df3)
+print(comp)
+print(score)
+print(eigVals)
+
+# Code below did not run:
+#def varianceExplained(df3, k=4):
+#       components, scores, eigenvalues = pca(df3, k)
+#       return sum(eigenvalues[0:k])/sum(eigenvalues)
+#
+#print(varianceExplained(df3,1))
+
+#PCA - Method 2:
+
+X = ffeatures_all_train # select the 'ffeatures_all_train' as X to run through PCA model
+pca_features = PCA(k=5, inputCol='features',outputCol='pca_features') # Running PCA model, K = number of components, inputCol = column of feature vectors, outputCol = new name for PCA features
+pca_model = pca_features.fit(X) #Fits data onto model
+
+pca_output = pca_model.transform(X) #Actually models the data
+pca_output.show(truncate=False)
+pca_output.describe()
+
+# Correlation Matrix:
+
+corr_mat=Statistics.corr(ffeatures_xi, method="spearman")
+print(corr_mat)
+
+
+# KNN-Means clustinering Model:
+
+# Trains a k-means model.
+kmeans = KMeans().setK(5).setSeed(1)
+model = kmeans.fit(ffeatures_all_train)
+
+centers = model.clusterCenters()
+print("Cluster Centers: ")
+for center in centers:
+    print(center)
+
+# Evaluate clustering by computing Within Set Sum of Squared Errors
+def error(point):
+    center = clusters.centers[clusters.predict(point)]
+    return sqrt(sum([x**2 for x in (point - center)]))
+
+#WSSSE = ffeatures_all_train.rdd.map(lambda point: error(point)).reduce(lambda x, y: x + y)
+#print("Within Set Sum of Squared Error = " + str(WSSSE))
+
+# Generalized Linear Regression Model:
+
+glr = GeneralizedLinearRegression(family="gaussian", link="identity", labelCol='label', featuresCol='model_features')
+glr_modelA = glr.fit(ffeatures_train, {glr.regParam:0.3})
+
+param_grid = ParamGridBuilder().\
+    addGrid(glr.regParam, [0, 0.5, 1, 2]).\
+    build()
+
+#evaluator = BCE(rawPredictionCol = 'label')
+
+predictionsA = glr_modelA.transform(ffeatures)
+predictionsA.show(50, truncate = False)
+
+# Prints coefficients and intercepts of model:
+print("Coefficients: " + str(glr_modelA.coefficients))
+print("Intercept: " + str(glr_modelA.intercept))
+
+# Prints summary statistics of model output:
+summary = glr_modelA.summary
+print("Coefficient Standard Errors: " + str(glr_modelA.coefficientStandardErrors))
+print("T Values: " + str(summary.tValues))
+print("P Values: " + str(summary.pValues))
+print("Dispersion: " + str(summary.dispersion))
+print("Null Deviance: " + str(summary.nullDeviance))
+print("Residual Degree Of Freedom Null: " + str(summary.residualDegreeOfFreedomNull))
+print("Deviance: " + str(summary.deviance))
+print("Residual Degree Of Freedom: " + str(summary.residualDegreeOfFreedom))
+print("AIC: " + str(summary.aic))
+print("Deviance Residuals: ")
+summary.residuals().show()
+
+
+# Cross-validation model:
+
+#cv = CrossValidator(estimator=glr, estimatorParamMaps=param_grid, evaluator=evaluator, numFolds=3)
+#cv_model = cv.fit(ffeatures)
+#pred_training_cv = cv_model.transform(ffeatures)
+#pred_training_cv.show(25, truncate = False)
+#summary = cv_model.summary
+#print('T Values: ' + str(summary.tValues))
+#print('Intercept: ' + str(cv_model.bestModel.intercept))
+#print('coefficients: ' + str(cv_model.bestModel.coefficients))
+#print( 'RMSE: ' + str(cv_model.bestModel.rootMeanSquaredError))
+
+#cv_model.bestModel.summary
+#print(str(summary.show()))
+
+*************************************************************************************************************************************************************
+*************************************************************************************************************************************************************

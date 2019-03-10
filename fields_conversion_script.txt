@@ -1,0 +1,172 @@
+FIELDS_CONVERSION_CODE:
+
+********************************************************************************************************************************************
+********************************************************************************************************************************************
+
+from os.path import expanduser, join, abspath
+from pyspark.sql import HiveContext
+from pyspark.sql import SparkSession, SQLContext
+from pyspark.sql import functions as F
+from pyspark.sql.functions import *
+from pyspark.sql import *
+from pyspark import SparkConf, SparkContext, SQLContext
+from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml import Pipeline
+from collections import defaultdict
+from pyspark.sql.types import *
+from pyspark.mllib.linalg import SparseVector, DenseVector
+import sys
+import os
+import numpy as np
+
+# Initializing Spark Session:
+
+warehouse_location = '/apps/hive/warehouse/csv_dump'
+spark = SparkSession \
+    .builder \
+    .appName("midt_pcc_FieldsConversion") \
+    .enableHiveSupport() \  # makes sure there is connection to Hive
+    .getOrCreate()
+
+# Loading in csv files of pcc_classification dataset:
+
+df = spark.read.format('csv').options(header='true', delimiter=',', inferschema='true').load("hdfs://DEVCLUSTER/apps/hive/warehouse/csv_dump/*")
+df.cache()
+df.createOrReplaceTempView("csv_dump") # Create temporary view with SparkSQL in order to use spark.sql() command to query data
+
+# Collecting all data from csv files:
+
+sqldf = spark.sql("select * from csv_dump")
+# Re-naming current column headers (headers get removed when exporting from Hive to csv) to feature names:
+sqldf = sqldf.withColumnRenamed('00A4', 'PCC').withColumnRenamed('US','POS').withColumnRenamed('TP2','optcxr').withColumnRenamed('13', 'trippassengers').withColumnRenamed('I', 'DOI').withColumnRenamed('16','stops').withColumnRenamed('O','interline').withColumnRenamed('256','APD').withColumnRenamed('2','seg_count').withColumnRenamed('ny11','metrofrom_cc').withColumnRenamed('ny13','metroto_cc').withColumnRenamed('TP14','mktcxr').withColumnRenamed('5','cabinclass').withColumnRenamed('117','volume').cache()
+sqldf = sqldf.select('PCC','POS','optcxr','mktcxr','metrofrom_cc','metroto_cc','trippassengers','DOI','stops','interline','APD','seg_count','cabinclass','volume')
+#sqldf = sqldf.na.drop()
+
+# Indexing carriers process: combining 'mktcxr' and 'optcxr' features into same index:
+
+carriers_a = spark.sql('select distinct TP14 from csv_dump') # Selecting 'mktcxr' into single dataframe
+carriers_a = carriers_a.withColumnRenamed('TP14','mktcxr')
+carriers1 = carriers_a.select('mktcxr').collect()  # Collecting to local instance
+
+carriers_b = spark.sql('select distinct TP2 from csv_dump')  # Selecting 'optcxr' into single dataframe
+carriers_b = carriers_b.withColumnRenamed('TP2','optcxr')
+carriers2 = carriers_b.select('optcxr').collect()  # Collecting to local instance
+
+comb = carriers_b.join(carriers_a,(carriers_b.optcxr==carriers_a.mktcxr)) # Joining columns 'mktcxr' and 'optcxr'
+comb = comb.withColumnRenamed('optcxr','cxr_cxr')  # Selecting dataframe with new joined column
+comb = comb.select('cxr_cxr').distinct()
+comb.describe().show()
+comb1 = comb.collect()  # Collecting to local instance
+
+# Creating dictionary/index object for new joined 'carriers' column:
+
+ref_cxr = 0
+d_cxr = defaultdict(int)
+for i in set(x.cxr_cxr for x in comb1):
+       d_cxr[i]+=ref_cxr
+       ref_cxr+=1
+print(d_cxr)
+
+udfCxr = udf(lambda x: d_cxr[x], IntegerType()) # Converting dictionary to integer values
+df_cxr = comb.withColumn('cxr_cxr', udfCxr(col('cxr_cxr')))
+df_cxr.describe().show()
+print(df_cxr.show())
+
+
+# Creating index object for countries columns: 'metrofrom_cc', 'metroto_cc', 'POS'
+
+# Selecting metrofrom_cc feature into single dataframe
+countries_a = spark.sql('select distinct upper(ny11) from csv_dump')
+countries_a = countries_a.withColumnRenamed('upper(ny11)','metrofrom_cc')
+countries_a = countries_a.select('metrofrom_cc')
+print(countries_a.show())
+countries_a.describe().show()
+
+# Selecting metroto_cc feature into single dataframe
+countries_b = spark.sql('select distinct upper(ny13) from csv_dump')
+countries_b = countries_b.withColumnRenamed('upper(ny13)','metroto_cc')
+countries_b = countries_b.select('metroto_cc')
+print(countries_b.show())
+countries_b.describe().show()
+
+# Selecting POS feature into single dataframe
+countries_c = spark.sql('select distinct US from csv_dump')
+countries_c = countries_c.withColumnRenamed('US','POS')
+countries_c = countries_c.select('POS')
+print(countries_c.show())
+countries_c.describe().show()
+
+comb_cc = countries_b.join(countries_a,(countries_b.metroto_cc==countries_a.metrofrom_cc))  # Joining columns 'mktcxr' and 'optcxr'
+comb_cc = comb_cc.withColumnRenamed('metroto_cc','cc_cc') # Selecting dataframe with new joined column
+comb_cc = comb_cc.select('cc_cc').distinct()
+comb_cc.describe().show()
+comb_cc1 = comb_cc.collect() # Collecting to local instance
+
+# Second join action with POS - not necessary:
+#comb_cc1 = countries_c.join(comb_cc,(countries_c.POS==comb_cc.cc_cc),'outer')
+#comb_cc1 = comb_cc1.withColumnRenamed('POS','COUNTRY_CC')
+#comb_cc1 = comb_cc1.select('COUNTRY_CC').distinct()
+#print(comb_cc1.show())
+#comb_cc1.describe().show()
+
+# Creating dictionary/index object for new joined 'countries' column:
+
+ref_cc = 0
+d_cc = defaultdict(int)
+for i in set(x.cc_cc for x in comb_cc1):
+       d_cc[i]+=ref_cc
+       ref_cc+=1
+print(d_cc)
+
+udfCc = udf(lambda x: d_cc[x], IntegerType())  # Converting dictionary to integer values
+df_cc = comb_cc.withColumn('cc_cc', udfCc(col('cc_cc')))
+df_cc.describe().show()
+print(df_cc.show())
+
+# Setting up binary map and UserDefinedFunction to convert 'DOI' and 'interline' into binary index:
+
+mapBinary = {'D':0,'I':1,'O':0,'I':1}
+udfBinary = udf(lambda x: mapBinary[x], IntegerType())
+
+#Stringindexer for entire dataframe EXCEPT mktcxr, optcxr, metrfrom_cc, metroto_cc, POS, and numeric columns:
+
+indexers = [StringIndexer(inputCol=column,outputCol=column+"_idx").fit(sqldf) for column in list(set(sqldf.columns)-set(['POS','optcxr','trippassengers','stops','APD','seg_count','mktcxr','volume']))]
+pipeline = Pipeline(stages=indexers) # Setting up pipeline and setting stages = indexers from previous line
+dfr = pipeline.fit(sqldf).transform(sqldf)  # Transforms specified cateogrical columns into number-indexed columns
+dfr = dfr.orderBy(dfr.optcxr.desc()).orderBy(dfr.mktcxr.desc())
+
+# Selecting data frame with non-indexed data + new indexed data:
+dfr = dfr.select('PCC','PCC_idx','POS','trippassengers','DOI','stops','interline','APD','seg_count','mktcxr','optcxr','metrofrom_cc','metrofrom_cc_idx','metroto_cc','metroto_cc_idx','cabinclass','cabinclass_idx','volume')
+
+# Selecting dataframe with all features (categorical and indexed values) AND binary-transformed features:
+dfr1 = dfr.select('PCC','PCC_idx','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metrofrom_cc_idx','metroto_cc','metroto_cc_idx','cabinclass','cabinclass_idx','volume').withColumn('mktcxr_idx',udfCxr(col('mktcxr'))).withColumn('optcxr_idx',udfCxr(col('optcxr'))).withColumn('POS_idx',udfCc(col('POS'))).withColumn('DOI_idx',udfBinary(col('DOI'))).withColumn('interline_idx',udfBinary(col('interline')))
+
+# Full dataset = Indexed + non-indexed values
+dfr_full = dfr1.select('PCC','PCC_idx','POS','POS_idx','optcxr','optcxr_idx','mktcxr','mktcxr_idx','trippassengers','stops','APD','seg_count','DOI','DOI_idx','interline','interline_idx','metrofrom_cc','metrofrom_cc_idx','metroto_cc','metroto_cc_idx','cabinclass','cabinclass_idx','volume')
+
+dfr_reference = dfr1.select('PCC','PCC_idx','POS','POS_idx','optcxr','optcxr_idx','mktcxr','mktcxr_idx','DOI','DOI_idx','interline','interline_idx','metrofrom_cc','metrofrom_cc_idx','metroto_cc','metroto_cc_idx','cabinclass','cabinclass_idx')
+
+# Categorical Dataset:
+dfr_categorical = dfr1.select('PCC','POS','optcxr','mktcxr','trippassengers','stops','APD','seg_count','DOI','interline','metrofrom_cc','metroto_cc','cabinclass','volume')
+
+# Numeric Dataset:
+dfr_numeric = dfr1.select('PCC_idx','POS_idx','optcxr_idx','mktcxr_idx','trippassengers','stops','APD','seg_count','DOI_idx','interline_idx','metrofrom_cc_idx','metroto_cc_idx','cabinclass_idx','volume')
+
+# Summary of indexed datadframe:
+dfr_ = dfr_numeric.describe()
+dfr_summary = dfr_.select('summary',round(dfr_['PCC_idx'],3),round(dfr_['POS_idx'],3),round(dfr_['optcxr_idx'],3),round(dfr_['mktcxr_idx'],3),round(dfr_['trippassengers'],3),round(dfr_['stops'],3),round(dfr_['APD'],3),round(dfr_['seg_count'],3),round(dfr_['DOI_idx'],3),round(dfr_['interline_idx'],3),round(dfr_['metrofrom_cc_idx'],3),round(dfr_['metroto_cc_idx'],3),round(dfr_['cabinclass_idx'],3),round(dfr_['volume'],3))
+dfr_summary1 = dfr_summary.withColumnRenamed('round(PCC_idx, 3)','PCC_idx').withColumnRenamed('round(POS_idx, 3)','POS_idx').withColumnRenamed('round(optcxr_idx, 3)','optcxr_idx').withColumnRenamed('round(mktcxr_idx, 3)','mktcxr_idx').withColumnRenamed('round(trippassengers, 3)','trippassengers').withColumnRenamed('round(stops, 3)','stops').withColumnRenamed('round(APD, 3)','APD').withColumnRenamed('round(seg_count, 3)','seg_count').withColumnRenamed('round(DOI_idx, 3)','DOI_idx').withColumnRenamed('round(interline_idx, 3)','interline_idx').withColumnRenamed('round(metrofrom_cc_idx, 3)','metrofrom_cc_idx').withColumnRenamed('round(metroto_cc_idx, 3)','metroto_cc_idx').withColumnRenamed('round(cabinclass_idx, 3)','cabinclass_idx').withColumnRenamed('round(volume, 3)','volume')
+
+print(dfr_full.sort(col("PCC").asc()).show())
+print(dfr_reference.sort(col("PCC").asc()).show())
+print(dfr_categorical.sort(col("PCC").asc()).show())
+print(dfr_numeric.sort(col("PCC_idx").asc()).show())
+print(dfr_summary1.show())
+
+# Exporting datafarmes to csv files in HDFS:
+dfr_categorical.write.csv('/user/matan.becker/dfr_cat.csv')
+dfr_numeric.write.csv('/user/matan.becker/dfr_num.csv')
+dfr_summary1.write.csv('/user/matan.becker/dfr_sum.csv')
+
+********************************************************************************************************************************************
+********************************************************************************************************************************************
